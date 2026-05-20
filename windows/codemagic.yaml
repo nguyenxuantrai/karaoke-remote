@@ -1,0 +1,25 @@
+workflows:
+  ios-release:
+    name: Build iOS Release
+    max_build_duration: 60
+    instance_type: mac_mini_m1
+    environment:
+      flutter: stable
+      xcode: latest
+    scripts:
+      - name: Flutter get packages
+        script: flutter pub get
+      - name: Install CocoaPods
+        script: |
+          cd ios
+          pod install
+      - name: Build Archive
+        script: |
+          # Ép Xcode build mà không cần chứng chỉ (Code signing)
+          xcodebuild archive -workspace ios/Runner.xcworkspace -scheme Runner -archivePath build/ios/archive/Runner.xcarchive CODE_SIGN_IDENTITY="" CODE_SIGNING_REQUIRED=NO CODE_SIGNING_ALLOWED=NO
+      - name: Zip the archive
+        script: |
+          cd build/ios/archive/
+          zip -r Runner.zip Runner.xcarchive
+    artifacts:
+      - build/ios/archive/Runner.zip
