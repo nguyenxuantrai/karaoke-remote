@@ -1,16 +1,11 @@
+import 'dart:convert';
 import 'package:flutter/material.dart';
 import 'package:firebase_core/firebase_core.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
-import 'package:youtube_explode_dart/youtube_explode_dart.dart' as yt;
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:speech_to_text/speech_to_text.dart' as stt;
-/*
-void main() async {
-  WidgetsFlutterBinding.ensureInitialized();
-  await Firebase.initializeApp();
-  runApp(const MyRemoteApp());
-}
-*/
+import 'package:http/http.dart' as http;
+
 void main() async {
   WidgetsFlutterBinding.ensureInitialized();
 
@@ -27,6 +22,7 @@ void main() async {
 
   runApp(const MyRemoteApp());
 }
+
 class MyRemoteApp extends StatelessWidget {
   const MyRemoteApp({super.key});
 
@@ -49,6 +45,9 @@ class PhoneRemoteScreen extends StatefulWidget {
 }
 
 class _PhoneRemoteScreenState extends State<PhoneRemoteScreen> {
+  // CẤU HÌNH KEY YOUTUBE API CỦA BẠN TẠI ĐÂY
+  final String _youtubeApiKey = 'AIzaSyCbKgoUvtm2ouy4PVRZiXj_qF4pdwFBQX4';
+
   String? _activeRoomId;
   bool _isLocked = true;
   bool _isCheckingMemory = true;
@@ -183,22 +182,39 @@ class _PhoneRemoteScreenState extends State<PhoneRemoteScreen> {
     setState(() { _isLoading = true; _searchResults.clear(); });
 
     try {
-      final ytClient = yt.YoutubeExplode();
       String searchQuery = isSuggestion ? keyword : (_isKaraokeOnly ? '$keyword karaoke' : keyword);
-      final searchList = await ytClient.search.getVideos(searchQuery);
 
-      List<Map<String, dynamic>> tempResults = [];
-      for (var video in searchList) {
-        final int durationSeconds = video.duration?.inSeconds ?? 240;
-        tempResults.add({
-          "title": video.title,
-          "id": video.id.value,
-          "thumbnail": video.thumbnails.mediumResUrl,
-          "duration": durationSeconds,
-        });
+      final String url = 'https://www.googleapis.com/youtube/v3/search?'
+          'part=snippet&'
+          'maxResults=25&'
+          'q=${Uri.encodeComponent(searchQuery)}&'
+          'type=video&'
+          'key=$_youtubeApiKey';
+
+      final response = await http.get(Uri.parse(url));
+
+      if (response.statusCode == 200) {
+        final data = json.decode(response.body);
+        final List items = data['items'] ?? [];
+
+        List<Map<String, dynamic>> tempResults = [];
+        for (var item in items) {
+          final idObj = item['id'];
+          final snippet = item['snippet'];
+
+          if (idObj != null && snippet != null) {
+            tempResults.add({
+              "title": snippet['title'] ?? 'Không có tiêu đề',
+              "id": idObj['videoId'] ?? '',
+              "thumbnail": snippet['thumbnails']?['medium']?['url'] ?? 'https://via.placeholder.com/150',
+              "duration": 240,
+            });
+          }
+        }
+        setState(() { _searchResults = tempResults; _isLoading = false; });
+      } else {
+        setState(() => _isLoading = false);
       }
-      setState(() { _searchResults = tempResults; _isLoading = false; });
-      ytClient.close();
     } catch (e) {
       setState(() => _isLoading = false);
     }
@@ -250,7 +266,6 @@ class _PhoneRemoteScreenState extends State<PhoneRemoteScreen> {
           appBar: AppBar(
             title: Text('Phòng: ${_activeRoomId?.replaceAll("room_", "")}'),
             actions: [
-              // Chỉ hiện nút hàng đợi danh sách khi màn hình dọc (Màn hình ngang đã hiện sẵn rồi)
               if (!isLandscape)
                 IconButton(icon: const Icon(Icons.playlist_play, color: Colors.amber, size: 30), onPressed: _showQueueBottomSheet),
               IconButton(
@@ -272,16 +287,13 @@ class _PhoneRemoteScreenState extends State<PhoneRemoteScreen> {
             ],
           ),
           body: isLandscape
-              ? Row( // CHIA ĐÔI MÀN HÌNH KHI XOAY NGANG
+              ? Row(
             children: [
-              // Bên trái: Vùng tìm kiếm và chọn bài (Chiếm 55% chiều ngang)
               Expanded(
                 flex: 55,
                 child: _buildSearchSection(),
               ),
-              // Thanh chia dọc tinh tế giữa 2 phần màn hình
               VerticalDivider(color: Colors.grey.shade800, width: 1, thickness: 1),
-              // Bên phải: Vùng hiển thị trực tiếp Hàng đợi đang chờ (Chiếm 45% chiều ngang)
               Expanded(
                 flex: 45,
                 child: Container(
@@ -291,13 +303,12 @@ class _PhoneRemoteScreenState extends State<PhoneRemoteScreen> {
               ),
             ],
           )
-              : _buildSearchSection(), // GIỮ NGUYÊN TOÀN MÀN HÌNH KHI XOAY DỌC
+              : _buildSearchSection(),
         );
       },
     );
   }
 
-  // Khối giao diện Tìm kiếm và Kết quả (được tách ra để dùng chung cho cả dọc và ngang)
   Widget _buildSearchSection() {
     return Column(
       children: [
@@ -329,7 +340,6 @@ class _PhoneRemoteScreenState extends State<PhoneRemoteScreen> {
             ],
           ),
         ),
-
         Padding(
           padding: const EdgeInsets.symmetric(horizontal: 12.0, vertical: 2.0),
           child: Row(
@@ -359,7 +369,6 @@ class _PhoneRemoteScreenState extends State<PhoneRemoteScreen> {
           ),
         ),
         const SizedBox(height: 5),
-
         Expanded(
           child: _isLoading
               ? const Center(child: CircularProgressIndicator())
@@ -371,7 +380,7 @@ class _PhoneRemoteScreenState extends State<PhoneRemoteScreen> {
                 margin: const EdgeInsets.symmetric(horizontal: 10, vertical: 5),
                 child: ListTile(
                   contentPadding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
-                  leading: Image.network(song["thumbnail"]!, width: 70, height: 50, fit: BoxFit.cover, errorBuilder: (_,__,___)=> const Icon(Icons.music_video)),
+                  leading: Image.network(song["thumbnail"]!, width: 70, height: 50, fit: BoxFit.cover, errorBuilder: (_, __, ___) => const Icon(Icons.music_video)),
                   title: Text(song["title"]!, maxLines: 2, overflow: TextOverflow.ellipsis, style: const TextStyle(fontSize: 13)),
                   trailing: Wrap(
                     spacing: 6,
@@ -404,17 +413,32 @@ class _PhoneRemoteScreenState extends State<PhoneRemoteScreen> {
                           minimumSize: Size.zero,
                         ),
                         child: const Text('Ưu tiên', style: TextStyle(color: Colors.black, fontWeight: FontWeight.bold, fontSize: 11)),
-                       /* onPressed: () async {
+                        onPressed: () async {
                           dynamic targetTimestamp;
 
-                          if (_currentQueueDocs.isNotEmpty) {
-                            final firstDoc = _currentQueueDocs.first.data() as Map<String, dynamic>;
+                          if (_currentQueueDocs.length >= 2) {
+                            final firstDoc = _currentQueueDocs[0].data() as Map<String, dynamic>;
+                            final secondDoc = _currentQueueDocs[1].data() as Map<String, dynamic>;
+
+                            final Timestamp? firstTimestamp = firstDoc['timestamp'] as Timestamp?;
+                            final Timestamp? secondTimestamp = secondDoc['timestamp'] as Timestamp?;
+
+                            if (firstTimestamp != null && secondTimestamp != null) {
+                              int firstMillis = firstTimestamp.millisecondsSinceEpoch;
+                              int secondMillis = secondTimestamp.millisecondsSinceEpoch;
+                              int midMillis = firstMillis + ((secondMillis - firstMillis) ~/ 2);
+
+                              targetTimestamp = Timestamp.fromMillisecondsSinceEpoch(midMillis);
+                            } else {
+                              targetTimestamp = FieldValue.serverTimestamp();
+                            }
+                          } else if (_currentQueueDocs.length == 1) {
+                            final firstDoc = _currentQueueDocs[0].data() as Map<String, dynamic>;
                             final Timestamp? firstTimestamp = firstDoc['timestamp'] as Timestamp?;
 
                             if (firstTimestamp != null) {
-                              targetTimestamp = Timestamp(
-                                firstTimestamp.seconds,
-                                firstTimestamp.nanoseconds + 1000000,
+                              targetTimestamp = Timestamp.fromMillisecondsSinceEpoch(
+                                firstTimestamp.millisecondsSinceEpoch + 2000,
                               );
                             } else {
                               targetTimestamp = FieldValue.serverTimestamp();
@@ -424,64 +448,6 @@ class _PhoneRemoteScreenState extends State<PhoneRemoteScreen> {
                           }
 
                           await FirebaseFirestore.instance.collection('secure_karaoke').doc(_activeRoomId).collection('queue').add({
-                            'title': song["title"],
-                            'youtube_id': song["id"],
-                            'duration': song["duration"],
-                            'timestamp': targetTimestamp,
-                            'priority': true,
-                          });
-
-                          if (mounted) {
-                            ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('⭐ Đã ưu tiên bài: ${song["title"]} lên kế tiếp!')));
-                          }
-                        },*/
-                        onPressed: () async {
-                          dynamic targetTimestamp;
-
-                          if (_currentQueueDocs.length >= 2) {
-                            // Lấy dữ liệu của bài thứ 1 (đang phát) và bài thứ 2 trong hàng đợi
-                            final firstDoc = _currentQueueDocs[0].data() as Map<String, dynamic>;
-                            final secondDoc = _currentQueueDocs[1].data() as Map<String, dynamic>;
-
-                            final Timestamp? firstTimestamp = firstDoc['timestamp'] as Timestamp?;
-                            final Timestamp? secondTimestamp = secondDoc['timestamp'] as Timestamp?;
-
-                            if (firstTimestamp != null && secondTimestamp != null) {
-                              // Chuyển sang miligiây để tính toán chính xác
-                              int firstMillis = firstTimestamp.millisecondsSinceEpoch;
-                              int secondMillis = secondTimestamp.millisecondsSinceEpoch;
-
-                              // Tính mốc thời gian nằm chính giữa bài thứ 1 và bài thứ 2
-                              int midMillis = firstMillis + ((secondMillis - firstMillis) ~/ 2);
-
-                              targetTimestamp = Timestamp.fromMillisecondsSinceEpoch(midMillis);
-                            } else {
-                              targetTimestamp = FieldValue.serverTimestamp();
-                            }
-                          } else if (_currentQueueDocs.length == 1) {
-                            // Nếu chỉ có đúng 1 bài đang phát, bài ưu tiên tiếp theo chỉ cần muộn hơn 1 chút
-                            final firstDoc = _currentQueueDocs[0].data() as Map<String, dynamic>;
-                            final Timestamp? firstTimestamp = firstDoc['timestamp'] as Timestamp?;
-
-                            if (firstTimestamp != null) {
-                              // Cộng thêm 2-3 giây (2000-3000ms) để chắc chắn lớn hơn bài đang phát
-                              targetTimestamp = Timestamp.fromMillisecondsSinceEpoch(
-                                firstTimestamp.millisecondsSinceEpoch + 2000,
-                              );
-                            } else {
-                              targetTimestamp = FieldValue.serverTimestamp();
-                            }
-                          } else {
-                            // Hàng đợi trống rỗng
-                            targetTimestamp = FieldValue.serverTimestamp();
-                          }
-
-                          // Tiến hành thêm vào Firestore
-                          await FirebaseFirestore.instance
-                              .collection('secure_karaoke')
-                              .doc(_activeRoomId)
-                              .collection('queue')
-                              .add({
                             'title': song["title"],
                             'youtube_id': song["id"],
                             'duration': song["duration"],
@@ -507,7 +473,6 @@ class _PhoneRemoteScreenState extends State<PhoneRemoteScreen> {
     );
   }
 
-  // Khối giao diện hiển thị danh sách bài hát bên phải khi màn hình xoay ngang
   Widget _buildSideQueueSection() {
     return Column(
       children: [
@@ -560,7 +525,6 @@ class _PhoneRemoteScreenState extends State<PhoneRemoteScreen> {
     );
   }
 
-  // Giữ nguyên BottomSheet khi người dùng dùng màn hình dọc
   void _showQueueBottomSheet() {
     showModalBottomSheet(
       context: context,
